@@ -1,0 +1,35 @@
+{
+  "name": "debezium-pg-source-diagnostics",
+  "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+  
+  "database.hostname": "ia-postgres-db-yveslandry363-974a.g.aivencloud.com",
+  "database.port": "15593",
+  "database.user": "avnadmin",
+  "database.password": "VOTRE_MOT_DE_PASSE_POSTGRES_ICI",
+  "database.dbname": "defaultdb",
+  "database.sslmode": "require",
+
+  "plugin.name": "pgoutput",
+  "table.include.list": "public.diagnostics",
+  "topic.prefix": "pg_diagnostics",
+
+  "publication.name": "dbz_publication",
+  "publication.autocreate.mode": "disabled",
+  
+  "slot.name": "debezium_slot_diagnostics",
+  "slot.drop.on.stop": "false",
+  
+  "snapshot.mode": "initial",
+  "transforms": "unwrap",
+  "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+  "transforms.unwrap.drop.tombstones": "false",
+  "transforms.unwrap.delete.handling.mode": "rewrite",
+  
+  "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+  "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+  "key.converter.schemas.enable": "true",
+  "value.converter.schemas.enable": "true",
+  
+  "heartbeat.interval.ms": "10000",
+  "heartbeat.topics.prefix": "__debezium-heartbeat"
+}

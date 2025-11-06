@@ -1,0 +1,56 @@
+{
+  "name": "postgres-diagnostics-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max": "1",
+    
+    "database.hostname": "ia-postgres-db-yveslandry363-974a.g.aivencloud.com",
+    "database.port": "15593",
+    "database.user": "avnadmin",
+    "database.password": "AVNS_y_YB7yKdoi-r20UAu1z",
+    "database.dbname": "defaultdb",
+    "database.server.name": "postgres-server",
+    
+    "plugin.name": "pgoutput",
+    "publication.name": "dbz_publication",
+    "publication.autocreate.mode": "disabled",
+    "slot.name": "debezium_slot",
+    
+    "table.include.list": "public.diagnostics",
+    "schema.include.list": "public",
+    
+    "topic.prefix": "pg_diagnostics",
+    "topic.creation.enable": "true",
+    "topic.creation.default.replication.factor": "1",
+    "topic.creation.default.partitions": "1",
+    
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+    
+    "transforms": "unwrap",
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.drop.tombstones": "false",
+    "transforms.unwrap.delete.handling.mode": "rewrite",
+    
+    "snapshot.mode": "initial",
+    "heartbeat.interval.ms": "10000",
+    "heartbeat.topics.prefix": "__debezium-heartbeat",
+    
+    "decimal.handling.mode": "string",
+    "time.precision.mode": "adaptive_time_microseconds",
+    "include.schema.changes": "false",
+    
+    "poll.interval.ms": "1000",
+    "max.batch.size": "2048",
+    "max.queue.size": "8192",
+    
+    "provide.transaction.metadata": "false",
+    "sanitize.field.names": "true",
+    
+    "errors.tolerance": "none",
+    "errors.log.enable": "true",
+    "errors.log.include.messages": "true"
+  }
+}
