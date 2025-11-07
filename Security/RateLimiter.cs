@@ -1,4 +1,5 @@
 // Fichier: Security/RateLimiter.cs
+using System.Diagnostics;
 using System.Collections.Concurrent;
 
 namespace PrototypeGemini.Security
@@ -27,12 +28,20 @@ namespace PrototypeGemini.Security
         public bool AllowRequest(string clientId)
         {
             var bucket = _buckets.GetOrAdd(clientId, _ => new TokenBucket(_maxRequests, _refillInterval));
-            
-            var allowed = bucket.TryConsume();
+
+            // --- AMÉLIORATION 5: Sécurité Proactive par Détection d'Anomalies ---
+            var (allowed, burstRate) = bucket.TryConsume();
             
             if (!allowed)
             {
                 _logger.LogWarning("⚠️ Rate limit dépassé pour le client {ClientId}", clientId);
+            }
+            else if (burstRate > 5) // Si plus de 5 requêtes en une seconde
+            {
+                _logger.LogWarning(
+                    "[SECURITY_PROACTIVE] Comportement suspect détecté pour le client {ClientId}. Taux de rafale élevé: {BurstRate} req/s.",
+                    clientId, burstRate
+                );
             }
             
             return allowed;
@@ -64,6 +73,7 @@ namespace PrototypeGemini.Security
             private int _tokens;
             private DateTime _lastRefill;
             private readonly object _lock = new();
+            private readonly ConcurrentQueue<DateTime> _requestTimestamps = new();
 
             public DateTime LastAccess { get; private set; }
 
@@ -76,7 +86,11 @@ namespace PrototypeGemini.Security
                 LastAccess = DateTime.UtcNow;
             }
 
-            public bool TryConsume()
+            /// <summary>
+            /// Tente de consommer un jeton.
+            /// </summary>
+            /// <returns>Un tuple (bool allowed, double burstRate) où burstRate est le nombre de requêtes dans la dernière seconde.</returns>
+            public (bool, double) TryConsume()
             {
                 lock (_lock)
                 {
@@ -86,10 +100,20 @@ namespace PrototypeGemini.Security
                     if (_tokens > 0)
                     {
                         _tokens--;
-                        return true;
+                        
+                        // --- AMÉLIORATION 5: Calcul du taux de rafale ---
+                        var now = DateTime.UtcNow;
+                        _requestTimestamps.Enqueue(now);
+                        while (_requestTimestamps.TryPeek(out var oldest) && (now - oldest).TotalSeconds > 1)
+                        {
+                            _requestTimestamps.TryDequeue(out _);
+                        }
+                        // --- Fin de l'amélioration ---
+
+                        return (true, _requestTimestamps.Count);
                     }
 
-                    return false;
+                    return (false, _requestTimestamps.Count);
                 }
             }
 

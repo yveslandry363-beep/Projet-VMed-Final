@@ -24,6 +24,7 @@ namespace PrototypeGemini.Services
         private readonly IConsumer<Ignore, string> _consumer;
         private readonly ConcurrentDictionary<int, DateTime> _recentProcessed = new();
         private readonly Counter<int> _messagesProcessed = Telemetry.MessagesProcessed;
+        private readonly RateLimiter _rateLimiter;
         private readonly Counter<int> _messagesSkipped = Telemetry.MessagesSkipped;
         private readonly Counter<int> _messagesDlq = Telemetry.MessagesDlq;
         private readonly Histogram<double> _processingDuration = Telemetry.ProcessingDuration;
@@ -33,13 +34,15 @@ namespace PrototypeGemini.Services
             IServiceProvider serviceProvider,
             ILogger<KafkaConsumerService> logger,
             IKafkaProducer dlqProducer,
-            IFeatureManager featureManager)
+            IFeatureManager featureManager,
+            RateLimiter rateLimiter) // 🛡️ INJECTION DU RATE LIMITER
         {
             _logger = logger;
             _serviceProvider = serviceProvider;
             _kafkaSettings = kafkaSettings.Value;
             _dlqProducer = dlqProducer;
             _featureManager = featureManager;
+            _rateLimiter = rateLimiter; // 🛡️ ASSIGNATION
 
             // Auto‑détection du mode d'authentification Kafka.
             // Priorité: si SASL creds présents -> SASL_SSL (Plain). Sinon si cert/key présents -> SSL (mTLS). Sinon erreur explicite.
@@ -201,6 +204,15 @@ namespace PrototypeGemini.Services
                             continue;
                         }
                         
+                        // 🛡️ BRANCHEMENT DU RATE LIMITER
+                        // Utilise l'ID de la partition comme identifiant client pour le rate limiting
+                        if (!_rateLimiter.AllowRequest($"kafka-partition-{result.Partition.Value}"))
+                        {
+                            _logger.LogWarning("🚦 Rate limit atteint pour la partition {Partition}. Pause de 1s.", result.Partition.Value);
+                            await Task.Delay(1000, stoppingToken); // Petite pause pour ne pas boucler à vide
+                            continue; // On réessaiera de consommer le même message au prochain poll
+                        }
+                        
                         await ProcessMessage(diagnostic);
                         
                         _recentProcessed[diagnostic.id] = DateTime.UtcNow;
@@ -249,6 +261,7 @@ namespace PrototypeGemini.Services
             using var scope = _serviceProvider.CreateScope();
             var gemini = scope.ServiceProvider.GetRequiredService<IGeminiApiService>();
             var db = scope.ServiceProvider.GetRequiredService<IDatabaseConnector>();
+            var hubContext = scope.ServiceProvider.GetRequiredService<IHubContext<StreamingHub>>();
             
             // Tronque le texte pour éviter les DoS par mémoire
             var safeDiagnostic = PrototypeGemini.Security.InputValidator.TruncateSafely(diagnostic.diagnostic_text, 10_000);
@@ -263,6 +276,10 @@ namespace PrototypeGemini.Services
             {
                 _logger.LogWarning("[DB_SKIP] Écriture BDD désactivée par Feature Flag.");
             }
+
+            // --- AMÉLIORATION "JAMAIS VUE": STREAMING VERS L'INTERFACE VR ---
+            _logger.LogInformation("📡 Streaming de la réponse vers les clients VR/UI...");
+            await hubContext.Clients.All.SendAsync("ReceiveIaGuidance", diagnostic.id.ToString(), iaResponse);
         }
         
         private async Task HandlePoisonPill(ConsumeResult<Ignore, string> result, string reason, Exception? ex)

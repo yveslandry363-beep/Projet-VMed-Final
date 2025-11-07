@@ -1,4 +1,5 @@
 // Fichier: Security/InputValidator.cs
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using System.Security;
 
@@ -10,6 +11,10 @@ namespace PrototypeGemini.Security
     /// </summary>
     public static partial class InputValidator
     {
+        // --- AMÉLIORATION "JAMAIS VUE": RASP (Runtime Application Self-Protection) ---
+        // Analyse comportementale pour détecter les attaques lentes ou les scans de vulnérabilités.
+        private static readonly ConcurrentDictionary<string, (int Count, DateTime LastAttempt)> _suspiciousActivityTracker = new();
+
         // Expressions régulières compilées pour performance maximale
         [GeneratedRegex(@"^[a-zA-Z0-9_\-\.@]{1,100}$", RegexOptions.Compiled)]
         private static partial Regex SafeIdentifierRegex();
@@ -154,10 +159,38 @@ namespace PrototypeGemini.Security
             if (ContainsSqlInjection(diagnosticText))
                 return (false, "Le diagnostic contient des caractères suspects (possible injection SQL)");
 
+            // --- AMÉLIORATION RASP ---
+            // Si on voit plusieurs tentatives suspectes de la même source en peu de temps, on bloque.
+            var sourceIdentifier = "kafka-consumer"; // Dans une API web, ce serait l'IP du client.
+            if (IsSuspiciousSequence(sourceIdentifier, ContainsDangerousCharacters(diagnosticText)))
+            {
+                return (false, "Séquence d'attaques détectée (RASP). Source bloquée temporairement.");
+            }
+            // --- Fin de l'amélioration ---
+
             if (ContainsPathTraversal(diagnosticText))
                 return (false, "Le diagnostic contient des caractères suspects (possible path traversal)");
 
             return (true, string.Empty);
+        }
+
+        private static bool IsSuspiciousSequence(string source, bool isAttempt)
+        {
+            var entry = _suspiciousActivityTracker.GetOrAdd(source, (0, DateTime.MinValue));
+            if (isAttempt)
+            {
+                // Si la dernière tentative était il y a moins de 5 minutes, on incrémente. Sinon, on reset.
+                if (DateTime.UtcNow - entry.LastAttempt < TimeSpan.FromMinutes(5))
+                    entry.Count++;
+                else
+                    entry.Count = 1;
+                
+                entry.LastAttempt = DateTime.UtcNow;
+                _suspiciousActivityTracker[source] = entry;
+            }
+
+            // Si plus de 5 tentatives suspectes en 5 minutes, on considère que c'est un scan.
+            return entry.Count > 5;
         }
     }
 }

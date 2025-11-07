@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gemini-consumer-deployment
+  labels:
+    app: gemini-consumer
+spec:
+  replicas: 1 # KEDA (Phase 4) gérera le scaling
+  selector:
+    matchLabels:
+      app: gemini-consumer
+  template:
+    metadata:
+      labels:
+        app: gemini-consumer
+    spec:
+      containers:
+      - name: gemini-consumer-app
+        image: VOTRE_REGISTRY/gemini-consumer:latest # Sera remplacé par le CI/CD
+        ports:
+        - containerPort: 8080 # Pour les health checks
+        env:
+        - name: ASPNETCORE_URLS
+          value: "http://+:8080"
+        # Montage des secrets (voir Action 3.2)
+        volumeMounts:
+        - name: app-secrets
+          mountPath: "/app/secrets"
+          readOnly: true
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        # Sondes de santé pour que K8s sache si l'app est vivante et prête
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 20
+          periodSeconds: 15
+      volumes:
+      - name: app-secrets
+        secret:
+          secretName: gemini-app-secrets # Nom du secret K8s

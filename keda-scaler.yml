@@ -1,0 +1,35 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: gemini-consumer-scaler
+  namespace: default # Assurez-vous que cela correspond au namespace de votre déploiement
+spec:
+  scaleTargetRef:
+    name: gemini-consumer-deployment # 🎯 Cible le déploiement que nous avons créé à la Phase 3
+  
+  # --- Règles de Scaling ---
+  minReplicaCount: 1          # Toujours au moins 1 pod en cours d'exécution
+  maxReplicaCount: 100        # Peut monter jusqu'à 100 pods sous forte charge
+  pollingInterval: 30         # KEDA vérifie le lag toutes les 30 secondes
+  cooldownPeriod:  300        # Attend 5 minutes (300s) d'inactivité avant de redescendre à 0 (si minReplicaCount=0)
+
+  triggers:
+  - type: kafka
+    metadata:
+      # IMPORTANT: Doit pointer vers le service Kafka DANS le cluster Kubernetes
+      # Ce n'est PAS l'adresse Aiven externe.
+      bootstrapServers: kafka-service.default.svc.cluster.local:9092
+      
+      # Le topic et le groupe de consommateurs à surveiller
+      topic: pg_diagnostics.public.diagnostics
+      consumerGroup: gemini-processor-group-RESET-3 # Doit correspondre EXACTEMENT au GroupId dans appsettings.json
+      
+      # Le seuil de déclenchement du scaling
+      lagThreshold: "20" # Si le lag (nombre de messages non lus) dépasse 20, KEDA commence à créer de nouveaux pods.
+      
+      # --- Authentification (si nécessaire dans K8s) ---
+      # Si votre Kafka dans K8s nécessite une authentification, on la configure ici.
+      # Par exemple, pour SASL :
+      # authenticationMode: sasl_ssl
+      # username: "user-secret" # Fait référence à un TriggerAuthentication
+      # password: "password-secret"

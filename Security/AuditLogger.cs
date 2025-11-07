@@ -1,4 +1,5 @@
 // Fichier: Security/AuditLogger.cs
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Security.Claims;
 
@@ -13,6 +14,10 @@ namespace PrototypeGemini.Security
         private readonly ILogger<AuditLogger> _logger;
         private readonly string _auditLogPath;
         private readonly SemaphoreSlim _fileLock = new(1, 1);
+        
+        // --- AMÉLIORATION "JAMAIS VUE": JOURNAL D'AUDIT IMMUABLE (BLOCKCHAIN-READY) ---
+        private static string _lastEntryHash = "0000000000000000000000000000000000000000000000000000000000000000"; // Genesis hash
+        private static readonly object _hashLock = new();
 
         public AuditLogger(ILogger<AuditLogger> logger)
         {
@@ -40,6 +45,8 @@ namespace PrototypeGemini.Security
         {
             var auditEntry = new AuditEntry
             {
+                // --- AMÉLIORATION IMMUABLE ---
+                PreviousEntryHash = _lastEntryHash,
                 Timestamp = DateTime.UtcNow,
                 EventType = eventType,
                 Action = action,
@@ -55,6 +62,15 @@ namespace PrototypeGemini.Security
             { 
                 WriteIndented = false 
             });
+            
+            // --- AMÉLIORATION IMMUABLE: Calcul du hash de l'entrée actuelle ---
+            string currentEntryHash;
+            using (var sha256 = SHA256.Create())
+            {
+                var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(json));
+                currentEntryHash = BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
+            }
+            // --- Fin de l'amélioration ---
 
             _logger.LogInformation("📋 AUDIT: {EventType} | {Action} | User={UserId} | Success={Success}", 
                 eventType, action, userId, success);
@@ -62,7 +78,11 @@ namespace PrototypeGemini.Security
             await _fileLock.WaitAsync();
             try
             {
-                await File.AppendAllTextAsync(_auditLogPath, json + Environment.NewLine);
+                // On écrit le JSON qui contient maintenant le hash précédent
+                await File.AppendAllTextAsync(_auditLogPath, json.Replace("}", $", \"EntryHash\": \"{currentEntryHash}\"}}") + Environment.NewLine);
+                
+                // On met à jour le dernier hash connu de manière thread-safe
+                lock (_hashLock) { _lastEntryHash = currentEntryHash; }
             }
             finally
             {
@@ -144,6 +164,7 @@ namespace PrototypeGemini.Security
 
         private class AuditEntry
         {
+            public string PreviousEntryHash { get; set; } = string.Empty;
             public DateTime Timestamp { get; set; }
             public string EventType { get; set; } = string.Empty;
             public string Action { get; set; } = string.Empty;

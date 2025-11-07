@@ -64,7 +64,21 @@ public partial class Program
             startupStopwatch.Stop();
             Log.Information("⚡ Démarrage terminé en {TotalMs}ms", startupStopwatch.ElapsedMilliseconds);
 
-            await host.RunAsync();
+            // --- AMÉLIORATION "JAMAIS VUE": EXPOSITION DE L'API ET DES WEBSOCKETS ---
+            var app = host;
+
+            // Mapper les endpoints de l'API
+            app.MapPost("/validate-source", async (SourceValidationRequest request, IGeminiApiService geminiService) => {
+                var prompt = $"Cet article intitulé '{request.Title}' avec le résumé '{request.Summary}' est-il crédible et pertinent pour une base de connaissances médicales ? Réponds uniquement par 'OUI' ou 'NON'.";
+                var response = await geminiService.GetIaGuidanceAsync(prompt, CancellationToken.None);
+                return Results.Ok(new { isCredible = response.Trim().ToUpper() == "OUI" });
+            });
+
+            // Mapper le Hub SignalR pour le streaming VR
+            app.MapHub<StreamingHub>("/streamingHub");
+            // --- Fin de l'amélioration ---
+
+            await app.RunAsync();
         }
         catch (Exception ex) 
         {
@@ -152,6 +166,9 @@ public partial class Program
                 services.ConfigureAndValidate<GeminiSettings>(config, GeminiSettings.SectionName);
                 services.ConfigureAndValidate<RetryPoliciesSettings>(config, RetryPoliciesSettings.SectionName);
 
+                // --- AMÉLIORATION "JAMAIS VUE": AJOUT DE SIGNALR POUR LE STREAMING TEMPS RÉEL ---
+                services.AddSignalR();
+
                 StartupDiagnostics.LogCheckpoint("📊 Configuration OpenTelemetry");
                 
                 // OpenTelemetry (Tracing et Metrics) - Optimisé avec timeouts
@@ -225,6 +242,8 @@ public partial class Program
                 services.AddSingleton<IDbConnectionFactory, PostgreSqlDbFactory>();
                 services.AddScoped<IDatabaseConnector, PostgreSqlConnector>();
                 services.AddScoped<IGeminiApiService, GeminiApiService>();
+                services.AddSingleton<IMilvusService, MilvusService>(); // Ajout du service Milvus
+                services.AddSingleton<IEmbeddingService, EmbeddingService>(); // Ajout du service d'embedding
                 services.AddSingleton<IKafkaProducer, KafkaProducer>();
 
                 StartupDiagnostics.LogCheckpoint(" Configuration Health Checks");
@@ -268,6 +287,19 @@ public partial class Program
             });
 }
 
+// --- AMÉLIORATION "JAMAIS VUE": MODÈLES POUR L'API ---
+public record SourceValidationRequest(string Title, string Summary);
+
+// --- AMÉLIORATION "JAMAIS VUE": HUB POUR LE STREAMING VR/UI ---
+using Microsoft.AspNetCore.SignalR;
+public class StreamingHub : Hub
+{
+    public async Task StreamIaGuidance(string diagnosticId, string guidance)
+    {
+        // Pousse la recommandation à tous les clients connectés (ex: une app Unity)
+        await Clients.All.SendAsync("ReceiveIaGuidance", diagnosticId, guidance);
+    }
+}
 // Extensions pour IServiceCollection
 public static class ServiceCollectionExtensions
 {

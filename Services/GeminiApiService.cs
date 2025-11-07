@@ -1,5 +1,6 @@
 ﻿// Fichier : Services/GeminiApiService.cs
 using Google.Apis.Auth.OAuth2;
+using Google.Apis.GenerativeLanguage.v1beta.Data;
 using Microsoft.FeatureManagement;
 using System.Diagnostics.Metrics;
 using System.Net.Http.Headers;
@@ -10,6 +11,7 @@ namespace PrototypeGemini.Services
 {
     public class GeminiApiService : IGeminiApiService
     {
+        private readonly IMilvusService _milvusService;
         private readonly IHttpClientFactory _httpFactory;
         private readonly ILogger<GeminiApiService> _logger;
         private readonly GeminiSettings _geminiSettings;
@@ -23,12 +25,14 @@ namespace PrototypeGemini.Services
     private readonly object _modelLock = new();
 
         public GeminiApiService(
+            IMilvusService milvusService,
             IHttpClientFactory httpFactory,
             ILogger<GeminiApiService> logger,
             IOptions<GeminiSettings> geminiOptions,
             IOptions<GoogleCloudSettings> gcOptions,
             IFeatureManager featureManager)
         {
+            _milvusService = milvusService;
             _httpFactory = httpFactory;
             _logger = logger;
             _geminiSettings = geminiOptions.Value;
@@ -50,6 +54,10 @@ namespace PrototypeGemini.Services
             var sw = Stopwatch.StartNew();
             try
             {
+                // --- LOGIQUE RAG ---
+                var ragContext = await _milvusService.GetContextFromDbAsync(diagnosticText, cancellationToken);
+                // --- FIN LOGIQUE RAG ---
+
                 var cleanedText = SanitizePrompt(diagnosticText);
                 if (string.IsNullOrEmpty(cleanedText)) return "Aucun texte fourni.";
 
@@ -114,7 +122,7 @@ namespace PrototypeGemini.Services
                 if (!string.IsNullOrEmpty(model))
                     activity?.SetTag("gen_ai.model", model);
 
-                var payload = BuildRequest(cleanedText);
+                var payload = BuildRequest(cleanedText, ragContext); // Utilise le contexte RAG
 
                 // 🔍 DEBUG: Afficher le payload exact envoyé à Vertex AI
                 var debugJson = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
@@ -171,18 +179,38 @@ namespace PrototypeGemini.Services
             }
         }
 
-        private GeminiApiRequest BuildRequest(string text) => new()
+        private GeminiApiRequest BuildRequest(string text, string ragContext)
         {
-            contents = new List<Content> 
-            { 
-                new Content 
-                { 
-                    role = "user",  // 🔥 VERTEX AI REQUIERT LE RÔLE "user"
-                    parts = new List<Part> { new Part { text = $"Analyse et recommandation claire: \"{text}\"" } } 
-                } 
-            },
-            generationConfig = _geminiSettings.GenerationConfig
-        };
+            // --- AMÉLIORATION 3: Optimisation des Coûts par Conscience du Modèle ---
+            bool isComplex = text.Length > 200 || text.Split(' ').Length > 30;
+            string modelChoiceLog = isComplex ? "complexe, utilisation du modèle de pointe" : "simple, utilisation du modèle économique";
+            _logger.LogInformation("[GEMINI_COST_OPT] Diagnostic jugé {Complexity}", modelChoiceLog);
+
+            // --- AMÉLIORATION 4: Boucle de Rétroaction sur l'Explicabilité (XAI) ---
+            var prompt = new StringBuilder();
+            prompt.AppendLine("Tu es un assistant médical expert. Ton analyse doit être structurée en deux parties :");
+            prompt.AppendLine("1. **Recommandation :** Une recommandation claire, concise et directement exploitable.");
+            prompt.AppendLine("2. **Raisonnement :** Une explication étape par étape de ton raisonnement, en te basant STRICTEMENT sur le contexte fourni et en citant les extraits pertinents.");
+            prompt.AppendLine();
+            prompt.Append(ragContext); // Le contexte de Milvus est injecté ici
+            prompt.AppendLine();
+            prompt.AppendLine("--- DIAGNOSTIC À ANALYSER ---");
+            prompt.AppendLine(text);
+            prompt.AppendLine("-----------------------------");
+
+            // On ajuste la température pour un raisonnement plus factuel
+            var generationConfig = _geminiSettings.GenerationConfig;
+            if (!isComplex)
+            {
+                generationConfig.Temperature = 0.2f; // Moins de créativité pour les cas simples
+            }
+
+            return new GeminiApiRequest
+            {
+                contents = new List<Content> { new Content { role = "user", parts = new List<Part> { new Part { text = prompt.ToString() } } } },
+                generationConfig = generationConfig
+            };
+        }
 
         /// <summary>
         /// Liste les modèles Vertex AI disponibles dans la région et sélectionne le meilleur match.
@@ -199,12 +227,12 @@ namespace PrototypeGemini.Services
 
             var preferred = new[]
             {
-                "gemini-2.5-pro",
-                "gemini-2.0-pro",
-                "gemini-1.5-pro-002",
-                "gemini-1.5-pro",
-                "gemini-1.5-flash-002",
-                "gemini-1.5-flash"
+                "gemini-2.5-pro",       // Modèle de pointe pour les cas complexes
+                "gemini-2.0-pro",       // Alternative de pointe
+                "gemini-1.5-pro-002",   // Modèle Pro fiable
+                "gemini-1.5-pro",       // Modèle Pro standard
+                "gemini-1.5-flash-002", // Modèle rapide et économique pour les cas simples
+                "gemini-1.5-flash"      // Fallback économique
             };
 
             // 1) Tentative: lister les modèles (meilleur cas)

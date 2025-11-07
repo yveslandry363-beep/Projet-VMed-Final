@@ -1,0 +1,16 @@
+langchain
+langchain-google-genai
+pymilvus
+pypdf
+python-dotenv
+prometheus-api-client
+scikit-learn
+kubernetes
+flask
+torch
+datasets
+transformers
+accelerate
+bitsandbytes
+feedparser
+requests

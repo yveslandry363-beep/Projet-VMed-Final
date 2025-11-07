@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: gemini-consumer-service
+spec:
+  selector:
+    app: gemini-consumer
+  ports:
+    - protocol: TCP
+      port: 8080 # Port pour les health checks
+      targetPort: 8080
+  type: ClusterIP # Service interne, non exposé à l'extérieur
