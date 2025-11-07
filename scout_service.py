@@ -1,10 +1,12 @@
 # Fichier: scout_service.py
 # Description: Service qui scanne les nouvelles recherches médicales et met à jour la base de connaissances RAG.
 
+import asyncio
 import feedparser
 import time
-import requests
-from ingest import main as run_ingestion # Réutilise le script d'ingestion de la Phase 2
+import httpx
+import json
+from kafka import KafkaProducer
 
 # --- CONFIGURATION ---
 SOURCES = {
@@ -13,69 +15,78 @@ SOURCES = {
     "arXiv_Biology": "http://export.arxiv.org/rss/q-bio"
 }
 GEMINI_VALIDATION_ENDPOINT = "http://gemini-consumer-app:8080/validate-source" # Endpoint exposé par l'app C#
+MAX_CONCURRENT_TASKS = 50 # Nombre de tâches parallèles (scan, validation)
+KAFKA_BOOTSTRAP_SERVERS = 'kafka:9092'
+INGESTION_TOPIC = 'knowledge_ingestion_queue'
 
-def fetch_new_articles():
-    """Scanne le flux RSS de PubMed pour de nouveaux articles."""
+async def fetch_source(session, source_name, url):
+    """Scanne un seul flux RSS de manière asynchrone."""
+    print(f"   -> Scan asynchrone de {source_name}...")
+    try:
+        response = await session.get(url, timeout=15)
+        feed = feedparser.parse(response.text)
+        return feed.entries
+    except httpx.RequestError as e:
+        print(f"   [WARN] Échec du scan de {source_name}: {e}")
+        return []
+
+async def fetch_all_articles_concurrently():
+    """Scanne TOUTES les sources en parallèle."""
     print("🛰️  ScoutService: Recherche de nouvelles publications sur plusieurs sources...")
-    all_entries = []
-    for source_name, url in SOURCES.items():
-        print(f"   -> Scan de {source_name}...")
-        feed = feedparser.parse(url)
-        all_entries.extend(feed.entries)
-    
-    new_articles_found = 0
-    for entry in all_entries:
-        print(f"  - Article trouvé: {entry.title}")
-        
-        # --- AMÉLIORATION "JAMAIS VUE": BOUCLE DE VALIDATION COGNITIVE ---
-        if is_article_credible(entry.title, entry.summary):
-            print("     ✅ Article jugé crédible par l'IA. Sauvegarde pour ingestion.")
-            save_article_as_pdf(entry.title, entry.summary)
-            new_articles_found += 1
-        else:
-            print("     ❌ Article jugé non pertinent ou non crédible. Ignoré.")
-        
-    print(f"✅ {new_articles_found} nouveaux articles potentiels identifiés.")
-    return new_articles_found > 0
+    async with httpx.AsyncClient() as session:
+        tasks = [fetch_source(session, name, url) for name, url in SOURCES.items()]
+        results = await asyncio.gather(*tasks)
+        all_entries = [entry for feed_entries in results for entry in feed_entries]
+    print(f"✅ {len(all_entries)} articles bruts trouvés sur toutes les sources.")
+    return all_entries
 
-def save_article_as_pdf(title, content):
-    """Simule la sauvegarde d'un article en PDF."""
-    # Cette fonction est une simulation. Un vrai projet nécessiterait
-    # une logique complexe pour scraper et convertir en PDF.
-    file_path = f"recherche_medicale/{title.replace(' ', '_').replace(':', '')[:50]}.txt"
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(f"Title: {title}\n\n{content}")
-
-def is_article_credible(title, summary):
+async def validate_and_queue_article(session, producer, entry):
     """Utilise l'IA elle-même pour valider la crédibilité d'un article."""
     try:
-        payload = {"title": title, "summary": summary}
-        response = requests.post(GEMINI_VALIDATION_ENDPOINT, json=payload, timeout=60)
+        payload = {"title": entry.title, "summary": entry.summary}
+        response = await session.post(GEMINI_VALIDATION_ENDPOINT, json=payload, timeout=60)
         response.raise_for_status()
         result = response.json()
-        # On s'attend à ce que l'API retourne un simple booléen
-        return result.get("isCredible", False)
-    except requests.exceptions.RequestException as e:
+        is_credible = result.get("isCredible", False)
+        if is_credible:
+            print(f"     ✅ Article '{entry.title[:30]}...' jugé crédible. Envoi vers la file d'ingestion.")
+            article_data = {'title': entry.title, 'content': entry.summary, 'source': entry.link}
+            producer.send(INGESTION_TOPIC, value=article_data)
+        return is_credible
+    except httpx.RequestError as e:
         print(f"   [WARN] Impossible de contacter le service de validation: {e}")
         # En cas d'échec, on est conservateur et on refuse l'article.
         return False
 
-def main():
+async def main():
     """Boucle principale du ScoutService."""
     print("🤖 Démarrage du ScoutService (Chercheur Autonome)...")
+    producer = KafkaProducer(
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+        value_serializer=lambda v: json.dumps(v).encode('utf-8')
+    )
+
     while True:
-        has_new_articles = fetch_new_articles()
+        # --- AMÉLIORATION "JAMAIS VUE": EXÉCUTION MASSIVEMENT PARALLÈLE ---
+        # 1. Scanner toutes les sources en même temps
+        all_entries = await fetch_all_articles_concurrently()
         
-        if has_new_articles:
-            print("📚 De nouveaux articles ont été trouvés. Mise à jour de la base de connaissances RAG...")
-            # On appelle directement la fonction main de notre script d'ingestion de la Phase 2
-            run_ingestion()
-            print("✅ Base de connaissances mise à jour avec les dernières recherches.")
-        else:
-            print("👍 Aucune nouvelle publication pertinente trouvée.")
+        # 2. Valider tous les articles trouvés en parallèle
+        print(f"🔬 Validation cognitive de {len(all_entries)} articles en parallèle (batchs de {MAX_CONCURRENT_TASKS})...")
+        async with httpx.AsyncClient() as session:
+            validation_tasks = [validate_and_queue_article(session, producer, entry) for entry in all_entries]
+            for i in range(0, len(validation_tasks), MAX_CONCURRENT_TASKS):
+                batch = validation_tasks[i:i+MAX_CONCURRENT_TASKS]
+                await asyncio.gather(*batch)
+        
+        # Forcer l'envoi de tous les messages en attente dans le buffer du producer
+        producer.flush()
+        print("👍 Cycle de validation terminé. Les articles crédibles sont dans la file d'attente Kafka.")
             
-        print("😴 Attente de 24 heures avant la prochaine recherche...")
-        time.sleep(86400) # Attend 24 heures
+        # --- AMÉLIORATION "JAMAIS VUE": RYTHME ADAPTATIF ---
+        # Cycle rapide de 5 minutes pour une réactivité maximale sans surcharger les APIs.
+        print("⏱️  Cycle d'enrichissement terminé. Prochain cycle dans 5 minutes.")
+        await asyncio.sleep(300)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

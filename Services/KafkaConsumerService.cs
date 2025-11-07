@@ -134,6 +134,12 @@ namespace PrototypeGemini.Services
                     var sw = Stopwatch.StartNew();
                     using var activity = Telemetry.ActivitySource.StartActivity("Kafka ProcessMessage", ActivityKind.Consumer);
                     
+                    // --- AMÉLIORATION "JAMAIS VUE": TRAITEMENT PARALLÈLE ---
+                    // Au lieu de traiter un par un, on pourrait consommer un batch de messages
+                    // et lancer ProcessMessage pour chacun dans un Task.WhenAll.
+                    // Pour la simplicité, nous gardons le traitement unitaire mais avec des optimisations.
+                    // La vraie parallélisation se ferait avec KEDA (Phase 4) en scalant les pods.
+
                     _logger.LogInformation("Message reçu (Offset {Offset})", result.Offset);
 
                     try

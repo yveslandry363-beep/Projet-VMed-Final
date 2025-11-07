@@ -69,10 +69,18 @@ namespace PrototypeGemini.Services
                 string url;
                 string? model;
                 
-                if (!string.IsNullOrEmpty(apiKey))
+                // --- AMÉLIORATION "JAMAIS VUE": RÉSILIENCE FINANCIÈRE ---
+                // Priorité 1: Vertex AI (si gcp-key.json existe). C'est le mode de production optimal.
+                // Priorité 2: API Key Gemini (si GEMINI_API_KEY existe). C'est le mode de fallback,
+                // potentiellement gratuit ou moins cher, mais moins robuste.
+                string gcpKeyPath = Path.Combine(Directory.GetCurrentDirectory(), "gcp-key.json");
+                bool useVertexAi = File.Exists(gcpKeyPath);
+
+                if (!useVertexAi && !string.IsNullOrEmpty(apiKey))
                 {
-                    // Méthode 1: API Key (Gemini API - simple et rapide)
-                    _logger.LogInformation("[GEMINI_AUTH] Utilisation de l'API Key");
+                    // MODE FALLBACK: API Key (Gemini API - simple et rapide)
+                    _logger.LogWarning("[GEMINI_FALLBACK] gcp-key.json non trouvé. Utilisation du mode de secours avec API Key.");
+                    
                     // Prefer newer models first for Gemini API (AI Studio) path style
                     var preferredGeminiApiModels = new[]
                     {
@@ -86,19 +94,10 @@ namespace PrototypeGemini.Services
                     model = preferredGeminiApiModels.FirstOrDefault() ?? "models/gemini-1.5-flash";
                     url = $"{model}:generateContent?key={apiKey}";
                 }
-                else
+                else if (useVertexAi)
                 {
-                    // Méthode 2: OAuth2 avec gcp-key.json (Service Account) - VERTEX AI PURE - TECHNOLOGIE DE POINTE
+                    // MODE OPTIMAL: OAuth2 avec gcp-key.json (Service Account) - VERTEX AI
                     _logger.LogInformation("[VERTEX_AI] 🚀 Utilisation de VERTEX AI - Technologie de pointe avec Service Account");
-                    
-                    // Charger le Service Account depuis gcp-key.json
-                    string gcpKeyPath = Path.Combine(Directory.GetCurrentDirectory(), "gcp-key.json");
-                    
-                    if (!File.Exists(gcpKeyPath))
-                    {
-                        _logger.LogWarning("[VERTEX_AI_SKIP] Ni GEMINI_API_KEY ni gcp-key.json trouvés.");
-                        return "IA temporairement indisponible - Configuration requise.";
-                    }
                     
                     // 🚀 VERTEX AI - OAUTH2 DE POINTE AVEC SCOPE CLOUD-PLATFORM COMPLET
                     Environment.SetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", gcpKeyPath);
@@ -117,6 +116,12 @@ namespace PrototypeGemini.Services
                     // 🚀 Utilisation de la découverte de modèle dynamique pour une robustesse maximale
                     model = await ResolveVertexAiModelIdAsync(client, token, cancellationToken);
                     url = $"https://{_gcSettings.LocationId}-aiplatform.googleapis.com/v1/projects/{_gcSettings.ProjectId}/locations/{_gcSettings.LocationId}/publishers/google/models/{model}:generateContent";
+                }
+                else
+                {
+                    // Aucun mode d'authentification disponible
+                    _logger.LogError("[GEMINI_FAIL] Aucune méthode d'authentification disponible (ni gcp-key.json, ni GEMINI_API_KEY).");
+                    return "IA indisponible - Aucune configuration d'authentification valide.";
                 }
                 
                 if (!string.IsNullOrEmpty(model))

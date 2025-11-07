@@ -84,6 +84,16 @@ namespace PrototypeGemini.Services
             {
                 // --- AMÉLIORATION 1: Auto-Guérison (Self-Healing) ---
                 _logger.LogError(ex, "[RAG_SELF_HEAL] Échec de la recherche dans Milvus. Le mode RAG est temporairement désactivé.");
+                
+                // --- PUBLICATION VERS L'ARCHIVE COGNITIVE ---
+                var archiveEvent = new { type = "ERREUR_AUTOGUERISON", service = "MilvusService", message = "Connexion à Milvus échouée.", details = new { error = ex.Message, solution = "Le mode RAG a été désactivé temporairement. Le système continue en mode dégradé. Une nouvelle tentative aura lieu dans 1 minute." } };
+                using (var scope = _serviceProvider.CreateScope())
+                {
+                    var producer = scope.ServiceProvider.GetRequiredService<IKafkaProducer>();
+                    await producer.ProduceAsync("system_events", JsonSerializer.Serialize(archiveEvent), "SELF_HEAL_EVENT", null);
+                }
+                // --- Fin de la publication ---
+
                 _isMilvusAvailable = false; // On marque Milvus comme indisponible.
                 return string.Empty; // En cas d'erreur, on continue sans contexte RAG
             }

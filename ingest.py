@@ -51,11 +51,15 @@ def main():
     print(f"   (Connexion à Milvus sur {MILVUS_HOST}:{MILVUS_PORT})")
     
     try:
+        # --- AMÉLIORATION "JAMAIS VUE": INGESTION PAR BATCHS ---
+        # LangChain gère automatiquement l'envoi par batchs à l'API d'embedding,
+        # ce qui est beaucoup plus rapide que d'envoyer les chunks un par un.
         vector_store = Milvus.from_documents(
             documents=chunks,
             embedding=embeddings,
             collection_name=COLLECTION_NAME,
             connection_args={"host": MILVUS_HOST, "port": MILVUS_PORT},
+            batch_size=128 # Envoi de 128 chunks à la fois pour vectorisation
         )
         print("✅ Base de connaissances vectorielle créée/mise à jour avec succès.")
     except Exception as e:

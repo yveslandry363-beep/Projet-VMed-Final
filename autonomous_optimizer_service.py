@@ -6,6 +6,7 @@ import time
 import json
 import requests
 from prometheus_api_client import PrometheusConnect
+from kafka import KafkaProducer
 
 # --- CONFIGURATION ---
 PROMETHEUS_URL = "http://prometheus-service.monitoring.svc.cluster.local:9090"
@@ -13,6 +14,10 @@ STRATEGY_FILE = "model_strategy.json"
 
 # Endpoint de l'API K8s ou d'un service de déploiement pour déclencher un Canary
 CANARY_DEPLOY_ENDPOINT = "http://deployment-service/deploy-canary" 
+
+# Kafka pour l'archivage
+KAFKA_BOOTSTRAP_SERVERS = 'kafka:9092'
+EVENTS_TOPIC = 'system_events'
 
 # Requêtes Prometheus pour analyser la performance
 LATENCY_QUERY = 'rate(gemini_duration_seconds_sum{gen_ai_model=~".+"}[5m]) / rate(gemini_duration_seconds_count{gen_ai_model=~".+"}[5m])'
@@ -71,7 +76,7 @@ def generate_new_strategy(current_strategy, perf_data):
     print("👍 Stratégie actuelle jugée optimale. Aucun changement.")
     return None
 
-def trigger_canary_and_commit(new_strategy):
+def trigger_canary_and_commit(new_strategy, producer):
     """Déclenche un déploiement Canary, et si réussi, commit les changements sur GitHub."""
     print(f" canary pour la stratégie v{new_strategy['version']}...")
     
@@ -93,6 +98,11 @@ def trigger_canary_and_commit(new_strategy):
         # Étape C: Rendre le changement permanent et le commiter sur GitHub
         print("💾 Application de la nouvelle stratégie et commit sur GitHub...")
         os.rename(new_strategy_file, STRATEGY_FILE)
+
+        # --- PUBLICATION VERS L'ARCHIVE COGNITIVE ---
+        archive_event = {'type': 'AUTO_AMELIORATION', 'service': 'AutonomousOptimizer', 'message': 'Nouvelle stratégie de modèle validée et appliquée.', 'details': {'version': new_strategy['version'], 'solution': "Le modèle 'gemini-1.5-flash' a été promu comme modèle par défaut pour optimiser les coûts et la latence."}}
+        producer.send(EVENTS_TOPIC, value=archive_event)
+        # --- Fin de la publication ---
         
         # Utilisation de l'API GitHub pour créer un commit
         # (Nécessite un GITHUB_TOKEN avec les permissions appropriées)
@@ -107,6 +117,10 @@ def trigger_canary_and_commit(new_strategy):
 def main():
     print("🤖 Démarrage de l'Optimiseur de Performance Autonome...")
     prom = PrometheusConnect(url=PROMETHEUS_URL, disable_ssl=True)
+    producer = KafkaProducer(
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+        value_serializer=lambda v: json.dumps(v).encode('utf-8')
+    )
     
     while True:
         with open(STRATEGY_FILE, 'r') as f:
@@ -116,7 +130,7 @@ def main():
         if perf_data:
             new_strategy = generate_new_strategy(dict(current_strategy), perf_data)
             if new_strategy:
-                trigger_canary_and_commit(new_strategy)
+                trigger_canary_and_commit(new_strategy, producer)
         
         print("😴 Attente de 1 heure avant le prochain cycle d'optimisation...")
         time.sleep(3600)

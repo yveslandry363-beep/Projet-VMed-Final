@@ -146,3 +146,61 @@ services:
       - gemini-consumer-app # Pour l'API de validation
     volumes:
       - ./recherche_medicale:/app/recherche_medicale
+
+  # 10. Attu (Interface Visuelle pour Milvus)
+  attu:
+    image: zilliz/attu:v2.4.3
+    container_name: attu
+    depends_on:
+      - milvus
+    ports:
+      - "8000:3000" # Accédez à l'interface via http://localhost:8000
+    environment:
+      - MILVUS_URL=milvus:19530
+
+  # 11. Le Service d'Archive Cognitive
+  cognitive-archive-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    container_name: cognitive-archive-service
+    command: python cognitive_archive_service.py
+    depends_on:
+      - kafka
+    volumes:
+      - ./archive:/archive # Le fichier Markdown sera écrit ici
+
+  # 12. Le Service d'Ingestion par Lots (Le Stabilisateur)
+  knowledge-ingester-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    container_name: knowledge-ingester-service
+    command: python knowledge_ingester_service.py
+    depends_on:
+      - kafka
+      - milvus
+    volumes:
+      - ./recherche_medicale:/app/recherche_medicale
+
+  # 13. Le Superviseur Cognitif (Le Chef d'Orchestre)
+  cognitive-supervisor-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    container_name: cognitive-supervisor-service
+    command: python cognitive_supervisor_service.py
+    depends_on:
+      - kafka
+
+  # 14. Le Meta-Prompter (Le Lien vers Gemini Pro)
+  meta-cognitive-prompter:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    container_name: meta-cognitive-prompter
+    command: python meta_cognitive_prompter.py
+    depends_on:
+      - kafka
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY} # Passe la clé API depuis votre environnement local
