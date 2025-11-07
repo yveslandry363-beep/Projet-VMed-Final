@@ -228,5 +228,5 @@ dotnet run
 ```
 
 ## CI/CD
-- Voir `.github/workflows/ci.yml` pour la configuration automatisée
+- Voir `.github/workflows/ci.yml` pour la configuration automatisé
 
