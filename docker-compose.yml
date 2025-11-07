@@ -192,6 +192,8 @@ services:
     command: python cognitive_supervisor_service.py
     depends_on:
       - kafka
+    volumes:
+      - ./model_strategy.json:/app/model_strategy.json:ro # Accès en lecture seule
 
   # 14. Le Meta-Prompter (Le Lien vers Gemini Pro)
   meta-cognitive-prompter:

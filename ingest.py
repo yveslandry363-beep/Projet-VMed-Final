@@ -13,7 +13,7 @@ load_dotenv()
 
 # --- CONFIGURATION ---
 PDF_SOURCE_DIR = "recherche_medicale"
-MILVUS_HOST = "localhost"
+MILVUS_HOST = "milvus" # Utilise le nom du service Docker
 MILVUS_PORT = "19530"
 COLLECTION_NAME = "medical_knowledge_base"
 

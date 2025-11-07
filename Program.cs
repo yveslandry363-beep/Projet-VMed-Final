@@ -52,21 +52,22 @@ public partial class Program
             // Diagnostic de latence pré-build (optionnel, mesure la connectivité)
             await RunConnectivityDiagnosticsAsync();
 
-            StartupDiagnostics.LogCheckpoint("🏗️ Construction du Host");
-            var host = CreateHostBuilder(args).Build();
-            StartupDiagnostics.LogCheckpoint("✅ Host construit");
+            // --- CORRECTION ERREUR N°1: Utilisation de WebApplicationBuilder ---
+            var builder = WebApplication.CreateBuilder(args);
+            ConfigureServices(builder.Host); // Utilise une méthode helper pour garder le code propre
+            
+            var app = builder.Build();
+            // --- Fin de la correction ---
 
             // Déclenche la validation au démarrage (FluentValidation)
             StartupDiagnostics.LogCheckpoint("🔍 Validation des settings");
-            host.ValidateSettings();
+            app.Services.ValidateSettings(); // La validation est maintenant appelée sur le service provider
             StartupDiagnostics.LogCheckpoint("✅ Settings validés");
 
             startupStopwatch.Stop();
             Log.Information("⚡ Démarrage terminé en {TotalMs}ms", startupStopwatch.ElapsedMilliseconds);
 
             // --- AMÉLIORATION "JAMAIS VUE": EXPOSITION DE L'API ET DES WEBSOCKETS ---
-            var app = host;
-
             // Mapper les endpoints de l'API
             app.MapPost("/validate-source", async (SourceValidationRequest request, IGeminiApiService geminiService) => {
                 var prompt = $"Cet article intitulé '{request.Title}' avec le résumé '{request.Summary}' est-il crédible et pertinent pour une base de connaissances médicales ? Réponds uniquement par 'OUI' ou 'NON'.";
@@ -78,7 +79,7 @@ public partial class Program
             app.MapHub<StreamingHub>("/streamingHub");
             // --- Fin de l'amélioration ---
 
-            await app.RunAsync();
+            await app.RunAsync(); // Lance l'application web et les services d'arrière-plan
         }
         catch (Exception ex) 
         {
@@ -140,8 +141,9 @@ public partial class Program
         StartupDiagnostics.LogCheckpoint("✅ Diagnostic de connectivité terminé");
     }
 
-    public static IHostBuilder CreateHostBuilder(string[] args) =>
-        Host.CreateDefaultBuilder(args)
+    private static void ConfigureServices(IHostBuilder hostBuilder)
+    {
+        hostBuilder
             // Intègre Serilog au pipeline de logging
             .UseSerilog((context, services, config) => config
                 .ReadFrom.Configuration(context.Configuration)
@@ -285,6 +287,7 @@ public partial class Program
                 
                 StartupDiagnostics.LogCheckpoint("✅ Configuration des services terminée");
             });
+    }
 }
 
 // --- AMÉLIORATION "JAMAIS VUE": MODÈLES POUR L'API ---

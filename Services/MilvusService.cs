@@ -14,15 +14,17 @@ namespace PrototypeGemini.Services
     {
         private readonly MilvusClient _client;
         private readonly IEmbeddingService _embeddingService;
+        private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<MilvusService> _logger;
         private const string CollectionName = "medical_knowledge_base";
         private bool _isMilvusAvailable = true;
         private DateTime _lastCheckTime = DateTime.MinValue;
 
-        public MilvusService(ILogger<MilvusService> logger, IEmbeddingService embeddingService)
+        public MilvusService(ILogger<MilvusService> logger, IEmbeddingService embeddingService, IServiceProvider serviceProvider)
         {
             _logger = logger;
             _embeddingService = embeddingService;
+            _serviceProvider = serviceProvider;
             
             // --- AMÉLIORATION 1: Auto-Guérison (Self-Healing) ---
             // On ne se connecte pas immédiatement. La connexion sera tentée à la première requête.

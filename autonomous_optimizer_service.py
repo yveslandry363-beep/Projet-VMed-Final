@@ -9,7 +9,8 @@ from prometheus_api_client import PrometheusConnect
 from kafka import KafkaProducer
 
 # --- CONFIGURATION ---
-PROMETHEUS_URL = "http://prometheus-service.monitoring.svc.cluster.local:9090"
+# PROMETHEUS_URL = "http://prometheus:9090" # URL corrigée pour Docker Compose
+PROMETHEUS_URL = None # Désactivé temporairement car Prometheus n'est pas dans la stack
 STRATEGY_FILE = "model_strategy.json"
 
 # Endpoint de l'API K8s ou d'un service de déploiement pour déclencher un Canary
@@ -26,6 +27,10 @@ TOKEN_QUERY = 'rate(gemini_token_usage_total{gen_ai_model=~".+"}[5m])'
 def analyze_performance(prom):
     """Analyse les métriques de performance des modèles Gemini."""
     print("🧠 Analyse des performances des modèles Gemini...")
+    if not prom:
+        print("   [WARN] Prometheus non configuré. L'analyse de performance est ignorée.")
+        return None
+
     try:
         latency_results = prom.custom_query(query=LATENCY_QUERY)
         token_results = prom.custom_query(query=TOKEN_QUERY)
@@ -116,7 +121,12 @@ def trigger_canary_and_commit(new_strategy, producer):
 
 def main():
     print("🤖 Démarrage de l'Optimiseur de Performance Autonome...")
-    prom = PrometheusConnect(url=PROMETHEUS_URL, disable_ssl=True)
+    prom = None
+    if PROMETHEUS_URL:
+        prom = PrometheusConnect(url=PROMETHEUS_URL, disable_ssl=True)
+    else:
+        print("[WARN] URL Prometheus non définie. Le service tournera sans analyse de performance.")
+
     producer = KafkaProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         value_serializer=lambda v: json.dumps(v).encode('utf-8')
