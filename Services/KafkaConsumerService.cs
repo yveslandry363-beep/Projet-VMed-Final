@@ -65,7 +65,11 @@ namespace PrototypeGemini.Services
                 config.SaslUsername = _kafkaSettings.SaslUsername;
                 config.SaslPassword = _kafkaSettings.SaslPassword;
                 if (!string.IsNullOrWhiteSpace(_kafkaSettings.SslCaLocation))
+                {
                     config.SslCaLocation = _kafkaSettings.SslCaLocation;
+                    // Désactiver la vérification de l'identité du point de terminaison pour Aiven
+                    config.SslEndpointIdentificationAlgorithm = SslEndpointIdentificationAlgorithm.None;
+                }
             }
             else if (hasMtls)
             {

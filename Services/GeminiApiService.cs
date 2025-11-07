@@ -80,40 +80,45 @@ namespace PrototypeGemini.Services
                 }
                 else
                 {
-                    // Méthode 2: OAuth2 avec gcp-key.json (Service Account)
-                    _logger.LogInformation("[GEMINI_AUTH] Utilisation de OAuth2 avec Service Account");
+                    // Méthode 2: OAuth2 avec gcp-key.json (Service Account) - VERTEX AI PURE - TECHNOLOGIE DE POINTE
+                    _logger.LogInformation("[VERTEX_AI] 🚀 Utilisation de VERTEX AI - Technologie de pointe avec Service Account");
                     
                     // Charger le Service Account depuis gcp-key.json
                     string gcpKeyPath = Path.Combine(Directory.GetCurrentDirectory(), "gcp-key.json");
                     
                     if (!File.Exists(gcpKeyPath))
                     {
-                        _logger.LogWarning("[GEMINI_SKIP] Ni GEMINI_API_KEY ni gcp-key.json trouvés.");
+                        _logger.LogWarning("[VERTEX_AI_SKIP] Ni GEMINI_API_KEY ni gcp-key.json trouvés.");
                         return "IA temporairement indisponible - Configuration requise.";
                     }
                     
-                    // Utiliser les identifiants d'application par défaut (ADC) pour éviter les API obsolètes
+                    // 🚀 VERTEX AI - OAUTH2 DE POINTE AVEC SCOPE CLOUD-PLATFORM COMPLET
                     Environment.SetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", gcpKeyPath);
-                    var adc = await GoogleCredential.GetApplicationDefaultAsync(cancellationToken);
-                    var credential = adc.CreateScoped("https://www.googleapis.com/auth/cloud-platform");
                     
-                    // Obtenir le token OAuth2
+                    // Utiliser GoogleCredential avec scope cloud-platform pour accès complet Vertex AI
+                    var credential = GoogleCredential.GetApplicationDefault()
+                        .CreateScoped("https://www.googleapis.com/auth/cloud-platform");
+                    
+                    // 🏆 GÉNÉRATION TOKEN OAUTH2 VERTEX AI PREMIUM
                     var token = await ((ITokenAccess)credential).GetAccessTokenForRequestAsync(
                         "https://www.googleapis.com/auth/cloud-platform", 
                         cancellationToken);
                     
                     client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
                     
-                    // Résoudre dynamiquement le meilleur modèle disponible dans la région (préférence: gemini-2.5-pro)
-                    var selectedModelId = await ResolveVertexAiModelIdAsync(client, token, cancellationToken);
-                    model = selectedModelId;
-                    url = $"https://{_gcSettings.LocationId}-aiplatform.googleapis.com/v1/projects/{_gcSettings.ProjectId}/locations/{_gcSettings.LocationId}/publishers/google/models/{selectedModelId}:generateContent";
+                    // 🚀 Utilisation de la découverte de modèle dynamique pour une robustesse maximale
+                    model = await ResolveVertexAiModelIdAsync(client, token, cancellationToken);
+                    url = $"https://{_gcSettings.LocationId}-aiplatform.googleapis.com/v1/projects/{_gcSettings.ProjectId}/locations/{_gcSettings.LocationId}/publishers/google/models/{model}:generateContent";
                 }
                 
                 if (!string.IsNullOrEmpty(model))
                     activity?.SetTag("gen_ai.model", model);
 
                 var payload = BuildRequest(cleanedText);
+
+                // 🔍 DEBUG: Afficher le payload exact envoyé à Vertex AI
+                var debugJson = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+                _logger.LogInformation("[VERTEX_AI_DEBUG] Payload JSON envoyé:\n{JsonPayload}", debugJson);
 
                 // Créer JsonSerializerOptions avec TypeInfoResolver pour .NET 9
                 var jsonOptions = new JsonSerializerOptions
@@ -127,47 +132,8 @@ namespace PrototypeGemini.Services
                 {
                     var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
 
-                    // If OAuth (Vertex AI path) and model not found, invalidate cache, re-resolve and retry once
-                    if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GEMINI_API_KEY"))
-                        && response.StatusCode == System.Net.HttpStatusCode.NotFound)
-                    {
-                        _logger.LogWarning("[GEMINI_RETRY] 404 NOT_FOUND pour le modèle {Model}. Nouvelle résolution et nouvel essai unique.", model);
-                        lock (_modelLock) { _cachedModelId = null; _modelCacheExpiry = DateTimeOffset.MinValue; }
-
-                        var tokenHeader = client.DefaultRequestHeaders.Authorization?.Parameter;
-                        var newModel = await ResolveVertexAiModelIdAsync(client, tokenHeader ?? string.Empty, cancellationToken);
-                        var retryUrl = $"https://{_gcSettings.LocationId}-aiplatform.googleapis.com/v1/projects/{_gcSettings.ProjectId}/locations/{_gcSettings.LocationId}/publishers/google/models/{newModel}:generateContent";
-                        activity?.SetTag("gen_ai.model", newModel);
-
-                        using var retryResponse = await client.PostAsJsonAsync(retryUrl, payload, jsonOptions, cancellationToken);
-                        if (!retryResponse.IsSuccessStatusCode)
-                        {
-                            var retryBody = await retryResponse.Content.ReadAsStringAsync(cancellationToken);
-                            throw new HttpRequestException($"Échec de l'API Gemini après retry ({retryResponse.StatusCode}): {retryBody}");
-                        }
-
-                        // Swap response to retryResponse for downstream handling
-                        var retryContent = await retryResponse.Content.ReadAsStringAsync(cancellationToken);
-                        var retryObj = System.Text.Json.JsonSerializer.Deserialize<GeminiApiResponse>(retryContent, jsonOptions);
-                        var retryText = retryObj?.candidates?.FirstOrDefault()?.content?.parts?.FirstOrDefault()?.text;
-
-                        sw.Stop();
-                        _geminiDuration.Record(sw.Elapsed.TotalSeconds, new[] { new KeyValuePair<string, object?>("gen_ai.model", newModel) });
-
-                        if (retryObj?.usageMetadata != null)
-                        {
-                            _geminiTokenUsage.Add(retryObj.usageMetadata.TotalTokenCount, new[] { new KeyValuePair<string, object?>("gen_ai.model", newModel) });
-                        }
-
-                        if (!string.IsNullOrEmpty(retryText))
-                        {
-                            _logger.LogInformation("[VICTORY_API] Réponse de {Model} reçue en {TimeMs}ms", newModel, sw.ElapsedMilliseconds);
-                            return retryText;
-                        }
-
-                        _logger.LogWarning("[GEMINI_WARN] {Model} a retourné une réponse vide.", newModel);
-                        return "L'IA n'a pas retourné de contenu.";
-                    }
+                    // Plus de retry Vertex AI - utilisation API Gemini standard uniquement
+                    _logger.LogError("[GEMINI_ERROR] Erreur API Gemini: {StatusCode} - {Error}", response.StatusCode, errorBody);
 
                     throw new HttpRequestException($"Échec de l'API Gemini ({response.StatusCode}): {errorBody}");
                 }
@@ -207,7 +173,14 @@ namespace PrototypeGemini.Services
 
         private GeminiApiRequest BuildRequest(string text) => new()
         {
-            contents = new List<Content> { new Content { parts = new List<Part> { new Part { text = $"Analyse et recommandation claire: \"{text}\"" } } } },
+            contents = new List<Content> 
+            { 
+                new Content 
+                { 
+                    role = "user",  // 🔥 VERTEX AI REQUIERT LE RÔLE "user"
+                    parts = new List<Part> { new Part { text = $"Analyse et recommandation claire: \"{text}\"" } } 
+                } 
+            },
             generationConfig = _geminiSettings.GenerationConfig
         };
 

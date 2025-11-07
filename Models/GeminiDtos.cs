@@ -16,6 +16,9 @@ namespace PrototypeGemini.Models
 
     public class Content
     {
+        [JsonPropertyName("role")]
+        public string? role { get; set; }  // 🔥 VERTEX AI - RÔLE REQUIS
+
         [JsonPropertyName("parts")]
         public List<Part> parts { get; set; } = new();
     }
